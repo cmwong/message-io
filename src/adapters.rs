@@ -10,3 +10,4 @@ pub mod udp;
 pub mod ws;
 // Add new adapters here
 // ...
+pub mod xf_framed;
