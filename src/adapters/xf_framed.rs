@@ -232,8 +232,12 @@ fn encode_size<'a>(message: &[u8], buf: &'a mut [u8; MAX_ENCODED_SIZE]) -> &'a [
     let _ = size.encode_fixed(buf);
     &buf[..MAX_ENCODED_SIZE]
 }
-fn decode_size(data: &[u8]) -> Option<(u32, usize)> {
-    u32::decode_var(data)
+fn decode_size(data: &[u8]) -> Option<u32> {
+    if data.len() >= MAX_ENCODED_SIZE {
+        Some(u32::decode_fixed(data))
+    } else {
+        None
+    }
 }
 
 struct Decoder {
@@ -252,7 +256,7 @@ impl Decoder {
     fn try_decode(&mut self, data: &[u8], mut decoded_callback: impl FnMut(&[u8])) {
         let mut next_data = data;
         loop {
-            if let Some((expected_size, used_bytes)) = decode_size(next_data) {
+            if let Some(expected_size) = decode_size(next_data) {
                 let remaining = &next_data[..];
                 if remaining.len() >= expected_size as usize {
                     let (decoded, not_decoded) = remaining.split_at(expected_size as usize);
@@ -278,12 +282,13 @@ impl Decoder {
             //     }
             // }
             self.stored.extend_from_slice(next_data);
+            break;
         }
     }
 
     fn store_and_decoded_data<'a>(&mut self, data: &'a [u8]) -> Option<(&[u8], &'a [u8])> {
         // Process frame header
-        let ((expected_size, used_bytes), data) = match decode_size(&self.stored) {
+        let (expected_size, data) = match decode_size(&self.stored) {
             Some(size_info) => (size_info, data),
             None => {
                 // we append at most the potential data needed to decode the size
@@ -310,7 +315,7 @@ impl Decoder {
             // We can complete a message here
             let (to_store, remaining) = data.split_at(remaining);
             self.stored.extend_from_slice(to_store);
-            Some((&self.stored[used_bytes..], remaining))
+            Some((&self.stored[..], remaining))
         }
     }
 
@@ -362,7 +367,7 @@ mod test {
         encode_message(&mut buffer, &MESSAGE);
 
         assert_eq!(ENCODED_MESSAGE_SIZE, buffer.len());
-        let (expected_size, used_bytes) = decode_size(&buffer).unwrap();
+        let expected_size = decode_size(&buffer).unwrap();
         assert_eq!(MESSAGE_SIZE + 4, expected_size as usize);
         // assert_eq!(used_bytes, 4);
         assert_eq!(&MESSAGE, &buffer[4..]);
@@ -383,6 +388,29 @@ mod test {
         });
 
         assert_eq!(1, times_called);
+        assert_eq!(0, decoder.stored.len());
+    }
+
+    #[test]
+    // [          data           ]
+    // [message][message][message]
+    fn decode_multiple_messages_exact() {
+        let mut buffer = Vec::new();
+
+        let messages = [&MESSAGE_A, &MESSAGE_B, &MESSAGE_C];
+        encode_message(&mut buffer, messages[0]);
+        encode_message(&mut buffer, messages[1]);
+        encode_message(&mut buffer, messages[2]);
+
+        let mut decoder = Decoder::default();
+
+        let mut times_called = 0;
+        decoder.decode(&buffer, |decoded| {
+            assert_eq!(messages[times_called], decoded);
+            times_called += 1;
+        });
+
+        assert_eq!(3, times_called);
         assert_eq!(0, decoder.stored.len());
     }
 }

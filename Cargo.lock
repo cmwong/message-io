@@ -505,6 +505,7 @@ name = "message-io"
 version = "0.18.1"
 dependencies = [
  "bincode",
+ "bytes",
  "chrono",
  "criterion",
  "crossbeam-channel",
