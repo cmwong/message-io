@@ -22,6 +22,7 @@ use std::mem::{forget, MaybeUninit};
 use std::os::windows::io::{FromRawSocket, AsRawSocket};
 #[cfg(not(target_os = "windows"))]
 use std::os::{fd::AsRawFd, unix::io::FromRawFd};
+use integer_encoding::VarInt;
 
 const INPUT_BUFFER_SIZE: usize = u16::MAX as usize; // 2^16 - 1
 
@@ -51,6 +52,9 @@ impl XfListenConfig {
     }
 }
 
+// saiwong, xf system size is the whole message size including the header size
+// header size 4 byte
+// totalsize was included the header size == message.len + 4
 pub(crate) struct XfAdapter;
 impl Adapter for XfAdapter {
     type Remote = RemoteResource;
@@ -228,8 +232,8 @@ fn encode_size<'a>(message: &[u8], buf: &'a mut [u8; MAX_ENCODED_SIZE]) -> &'a [
     let _ = size.encode_fixed(buf);
     &buf[..MAX_ENCODED_SIZE]
 }
-fn decode_size(data: &[u8]) -> usize {
-    u32::decode_fixed(data) as usize
+fn decode_size(data: &[u8]) -> Option<(u32, usize)> {
+    u32::decode_var(data)
 }
 
 struct Decoder {
@@ -248,31 +252,31 @@ impl Decoder {
     fn try_decode(&mut self, data: &[u8], mut decoded_callback: impl FnMut(&[u8])) {
         let mut next_data = data;
         loop {
-            // if let Some((expected_size, used_bytes)) = decode_size(next_data) {
-            //     let remaining = &next_data[used_bytes..];
-            //     if remaining.len() >= expected_size {
-            //         let (decoded, not_decoded) = remaining.split_at(expected_size);
-            //         decoded_callback(decoded);
-            //         if !not_decoded.is_empty() {
-            //             next_data = not_decoded;
-            //             continue;
-            //         } else {
-            //             break;
-            //         }
-            //     }
-            // }
-            let expected_size = decode_size(next_data);
-            let remaining = &next_data[..];
-            if remaining.len() >= expected_size {
-                let (decoded, not_decoded) = remaining.split_at(expected_size);
-                decoded_callback(decoded);
-                if !not_decoded.is_empty() {
-                    next_data = not_decoded;
-                    continue;
-                } else {
-                    break;
+            if let Some((expected_size, used_bytes)) = decode_size(next_data) {
+                let remaining = &next_data[..];
+                if remaining.len() >= expected_size as usize {
+                    let (decoded, not_decoded) = remaining.split_at(expected_size as usize);
+                    decoded_callback(&decoded[MAX_ENCODED_SIZE..]);
+                    if !not_decoded.is_empty() {
+                        next_data = not_decoded;
+                        continue;
+                    } else {
+                        break;
+                    }
                 }
             }
+            // let expected_size = decode_size(next_data);
+            // let remaining = &next_data[..];
+            // if remaining.len() >= expected_size {
+            //     let (decoded, not_decoded) = remaining.split_at(expected_size);
+            //     decoded_callback(decoded);
+            //     if !not_decoded.is_empty() {
+            //         next_data = not_decoded;
+            //         continue;
+            //     } else {
+            //         break;
+            //     }
+            // }
             self.stored.extend_from_slice(next_data);
         }
     }
@@ -297,7 +301,7 @@ impl Decoder {
         };
 
         // At this point we know at least the expected size of the frame.
-        let remaining = expected_size - (self.stored.len() - used_bytes);
+        let remaining = expected_size as usize - self.stored.len();
         if data.len() < remaining {
             // We need more data to decoder
             self.stored.extend_from_slice(data);
@@ -327,10 +331,58 @@ impl Decoder {
         }
     }
 
-    /// Returns the bytes len stored in this decoder.
-    /// It can include both, the padding bytes and the data message bytes.
-    /// After decoding a message, its bytes are removed from the decoder.
-    pub fn stored_size(&self) -> usize {
-        self.stored.len()
+    // /// Returns the bytes len stored in this decoder.
+    // /// It can include both, the padding bytes and the data message bytes.
+    // /// After decoding a message, its bytes are removed from the decoder.
+    // pub fn stored_size(&self) -> usize {
+    //     self.stored.len()
+    // }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const MESSAGE_SIZE: usize = 20; // only works if (X + PADDING ) % 6 == 0
+    const ENCODED_MESSAGE_SIZE: usize = 4 + MESSAGE_SIZE; // 1 = log_2(20)/7
+    const MESSAGE: [u8; MESSAGE_SIZE] = [42; MESSAGE_SIZE];
+    const MESSAGE_A: [u8; MESSAGE_SIZE] = ['A' as u8; MESSAGE_SIZE];
+    const MESSAGE_B: [u8; MESSAGE_SIZE] = ['B' as u8; MESSAGE_SIZE];
+    const MESSAGE_C: [u8; MESSAGE_SIZE] = ['C' as u8; MESSAGE_SIZE];
+
+    fn encode_message(buffer: &mut Vec<u8>, message: &[u8]) {
+        let mut buf = [0; MAX_ENCODED_SIZE];
+        buffer.extend_from_slice(&*encode_size(message, &mut buf));
+        buffer.extend_from_slice(message);
+    }
+
+    #[test]
+    fn encode_one_message() {
+        let mut buffer = Vec::new();
+        encode_message(&mut buffer, &MESSAGE);
+
+        assert_eq!(ENCODED_MESSAGE_SIZE, buffer.len());
+        let (expected_size, used_bytes) = decode_size(&buffer).unwrap();
+        assert_eq!(MESSAGE_SIZE + 4, expected_size as usize);
+        // assert_eq!(used_bytes, 4);
+        assert_eq!(&MESSAGE, &buffer[4..]);
+    }
+
+    #[test]
+    // [ data  ]
+    // [message]
+    fn decode_one_message() {
+        let mut buffer = Vec::new();
+        encode_message(&mut buffer, &MESSAGE);
+
+        let mut decoder = Decoder::default();
+        let mut times_called = 0;
+        decoder.decode(&buffer, |decoded| {
+            times_called += 1;
+            assert_eq!(MESSAGE, decoded);
+        });
+
+        assert_eq!(1, times_called);
+        assert_eq!(0, decoder.stored.len());
     }
 }
