@@ -22,7 +22,6 @@ use std::mem::{forget, MaybeUninit};
 use std::os::windows::io::{FromRawSocket, AsRawSocket};
 #[cfg(not(target_os = "windows"))]
 use std::os::{fd::AsRawFd, unix::io::FromRawFd};
-use integer_encoding::VarInt;
 
 const INPUT_BUFFER_SIZE: usize = u16::MAX as usize; // 2^16 - 1
 
@@ -227,6 +226,11 @@ impl Local for LocalResource {
     }
 }
 
+/// message size, message body
+/// u8,u8,u8,u8, ....u8 message body...
+/// message size == 4 + message.len()
+///
+/// return the message.len() + 4 in a 4 bytes u8 little indien
 fn encode_size<'a>(message: &[u8], buf: &'a mut [u8; MAX_ENCODED_SIZE]) -> &'a [u8] {
     let size = message.len() as u32 + 4;
     let _ = size.encode_fixed(buf);
@@ -238,6 +242,7 @@ fn decode_size(data: &[u8]) -> Option<u32> {
     } else {
         None
     }
+    // u32::decode_fixed(data)     // package integer-encoding 4.0.0 giving problem
 }
 
 struct Decoder {
@@ -269,18 +274,6 @@ impl Decoder {
                     }
                 }
             }
-            // let expected_size = decode_size(next_data);
-            // let remaining = &next_data[..];
-            // if remaining.len() >= expected_size {
-            //     let (decoded, not_decoded) = remaining.split_at(expected_size);
-            //     decoded_callback(decoded);
-            //     if !not_decoded.is_empty() {
-            //         next_data = not_decoded;
-            //         continue;
-            //     } else {
-            //         break;
-            //     }
-            // }
             self.stored.extend_from_slice(next_data);
             break;
         }
@@ -412,5 +405,17 @@ mod test {
 
         assert_eq!(3, times_called);
         assert_eq!(0, decoder.stored.len());
+    }
+    #[test]
+    fn test_decode_size() {
+        let mut buf = [0; MAX_ENCODED_SIZE];
+        let size = encode_size(&MESSAGE, &mut buf);
+        assert_eq!(24, u32::decode_fixed(size));
+        println!("{:?}", &buf.to_owned());
+
+        assert_eq!(None, decode_size(&buf[0..1]));
+        assert_eq!(None, decode_size(&buf[0..2]));
+        assert_eq!(None, decode_size(&buf[0..3]));
+        assert_eq!(Some(24), decode_size(&buf[0..4]));
     }
 }

@@ -1,5 +1,3 @@
-use std::io::Read;
-
 use message_io::network::{NetEvent, Transport};
 use message_io::node::{self};
 use bytes::{BufMut, BytesMut};
@@ -37,7 +35,7 @@ pub fn main() {
         }
         NetEvent::Accepted(_, _) => unreachable!(), // Only generated when a listener accepts
         NetEvent::Message(_, data) => {
-            println!("{} {} {}", u16::decode_fixed(&data[3..4]), u16::decode_fixed(&data[5..6]), String::from_utf8_lossy(&data[7..]));
+            println!("{:?} {:?} {}", u16::decode_fixed(&data[3..4]), u16::decode_fixed(&data[5..6]), String::from_utf8_lossy(&data[7..]));
         }
         NetEvent::Disconnected(_) => (),
     });
