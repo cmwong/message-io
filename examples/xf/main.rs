@@ -24,6 +24,7 @@ pub fn main() {
     // handler.network().send(server_id, data);
 
     listener.for_each(move |event| match event.network() {
+        NetEvent::Accepted(_, _) => unreachable!(), // Only generated when a listener accepts
         NetEvent::Connected(_, established) => {
             if established {
                 println!("Connected to server at {} by {}", server_id.addr(), transport);
@@ -32,11 +33,10 @@ pub fn main() {
             } else {
                 println!("Can not connect to server at {} by {}", remote_addr, transport)
             }
-        }
-        NetEvent::Accepted(_, _) => unreachable!(), // Only generated when a listener accepts
+        },
         NetEvent::Message(_, data) => {
             println!("{:?} {:?} {}", u16::decode_fixed(&data[3..4]), u16::decode_fixed(&data[5..6]), String::from_utf8_lossy(&data[7..]));
-        }
+        },
         NetEvent::Disconnected(_) => (),
     });
 }
